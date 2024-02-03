@@ -1,28 +1,26 @@
-# Tamer
-You shouldn't have to jump through hoops to write asynchronous programs. After
-all async functions are just functions ... with superpowers. Tamer helps you
-unlock these superpowers and turns your pack of async wolfs into a pack of
-disciplined async dogs that behave.
+# Async-Tamer
+You shouldn't have to split your codebase or jump through hoops just to use
+`async def`. After all async functions are just functions ... with superpowers.
+Async-Tamer helps you harness these superpowers by seeing `asynd def` for what
+they are: A means to flag and reduce periods of busy waiting. (Details at the
+end of this readme.)
 
 **Features**
 
-- [x] 100% pure breed Python
-- [x] 100% test coverage
-- [x] zero core dependencies 
-- [x] small memory footprint
-- [x] permissive license (BSD 3-clause)
+- ✅ 100% python
+- ✅ 100% free (BSD 3-clause)
+- ✅ 100% lean (no dependencies)
 
 ## Installation
 ```
-pip install tamer
+pip install async-tamer
 ```
-... or via your favourite package manager.
 
 ## Usage
 
-In a nutshell, you add `@tamed` to an asynchronous function and call it from either
-sync and async contexts. Additionally you can assign it to an `AsyncScope` to get
-structured lifecycle management.
+In a nutshell, you add `@tamed` to an asynchronous function to enable calling it
+directly from either sync and async contexts. You may also assign a `@tamed`
+function to an `AsyncScope` to get structured lifecycle management.
 
 ```python
 import asyncio
@@ -33,6 +31,8 @@ async def slow_echo(msg:str, delay:int) -> None:
     await asyncio.sleep(delay)
     print(msg)
 
+slow_echo("sync > DELAY(.5)", 0.5)
+
 with AsyncScope() as scope:
     slow_echo("scope > DELAY(.2)", .2, _async_scope=scope)
     slow_echo("scope > DELAY(.1)", .1, _async_scope=scope)
@@ -42,16 +42,17 @@ with AsyncScope() as scope:
 # Output
 # ------
 #
+# sync > DELAY(.5)
 # scope > DELAY(.1)
 # scope > DELAY(.2)
 ```
 
 ### The `@tamed` decorator
-To add more detail, a `@tamed` asynchronous function adapts its execution policy
-(how it behaves) depending on the context it is called from. In synchronous
-contexts, it behaves like an ordinary function (blocking). In async contexts, it
-behaves like an ordinary coroutine (non-blocking), and when assigned to an
-`AsyncScope` it listens to the scopes context manager (non-blocking).
+A `@tamed` asynchronous function changes its execution policy (how it behaves)
+depending on the context it is called from. In synchronous contexts, it behaves
+like an ordinary function (blocking). In async contexts, it behaves like an
+ordinary coroutine (non-blocking), and when assigned to an `AsyncScope` it
+follows the scopes context manager (non-blocking).
 
 ```python
 import asyncio
@@ -124,8 +125,7 @@ with AsyncScope() as scope:
 
 ### Returning Results
 
-Since `@tamed` functions know how to behave they also know when (and how) you
-expect results to be returned.
+`@tamed` functions know when (and how) you expect results to be returned.
 
 ```python
 import asyncio
@@ -141,9 +141,9 @@ async def slow_io():
 # ============================
 
 async def main():
-    handle = slow_io()  # <-- normal coroutine
+    coro = slow_io()  # <-- normal coroutine
 
-    return_code, msg = await handle  # <-- await the result
+    return_code, msg = await coro  # <-- await the result
     print(f"Status {return_code}: `{msg}`")
 
 asyncio.run(main())
@@ -183,21 +183,19 @@ print(f"Status {return_code}: `{msg}`")
 # Status 200: `Time to be awesome!`
 ```
 
-From the above, you can see that a `@tamed` function will return an instance of
-`DelayedResult` when called with an `AsyncScope`. This object represents the
-_result_ of the `@tamed` function and should not be confused with similar
-concepts like a `Future`, `asyncio.Task`, or `Coroutine` which represent
-asynchronously executing functions. While representing related objects, a
-`DelayedResult` is simpler. For example, results don't execute and as such you
-can neither cancel them nor can you attach a callback to a completion or failure
-event. They (results) are simply values that a function outputs and in the case
-of a `DelayedResult` it is simply a result that is late to the party and may not
-have arrived just yet.
+When called with an `AsyncScope` a `@tamed` function will return an instance of
+`DelayedResult`. This object represents the _result_ of the `@tamed` function
+and should not be confused with similar concepts like a `Future`,
+`asyncio.Task`, or `Coroutine` which represent concurrently executing code.
+While those are related objects, a `DelayedResult` is simpler. For example,
+unlike code, results don't execute. As such you can't cancel them nor can you
+chain callbacks. They (results) are simply values that a function outputs and in
+the case of a `DelayedResult` it is a value that arrives late to the party.
 
 What you can do with a `DelayedResult` is `await` it in an async context or use
 it to `.block()` a synchronous context until it becomes available. Further, you
-can inspect it's `.value` (both contexts) which will either return the result or
-raise an `AttributeError` if the result is unavailable.
+can inspect it's `.value` which will either return the result or raise an
+`AttributeError` if the result is unavailable.
 
 ```python
 import asyncio
@@ -220,10 +218,10 @@ with AsyncScope() as scope:
 
     try:
         return_code, msg = result.value
-    except AttributeError:  # <-- AttributeError if still delayed
+    except AttributeError:  # <-- AttributeError, not attived yet
         print(f"scope > result: Not yet available.")
 
-    result.block()  # <-- block until result arrives
+    result.block()  # <-- block in sync context
     return_code, msg = result.value
     print(f"scope > result: Status {return_code}: `{msg}`")
 
@@ -238,27 +236,27 @@ with AsyncScope() as scope:
 ### The `AsyncScope`
 
 An `AsyncScope` manages a set of `@tamed` functions and controls their
-lifecycle. Without going into the weeds, you need to be aware of 3 keywords:
+lifecycle. It's a structured way to add async sections to your codebase. Long
+story short, you need to be aware of 3 keywords:
 
-1. Scheduling: Line of code that "unleashes" (starts) a `@tamed` function.
-2. Switching: Line of code that switches between sync and async execution.
-3. Cleaning: Line of code that deals with async exceptions and errors. 
+1. Scheduling: Line of code that starts a `@tamed` function.
+2. Switching: Line of code that switches to another execution context.
+3. Cleaning: Line of code that deals with error handling.
 
-You handle the _scheduling_ by calling a `@tamed` function with `_async_scope=`
-set to a meaningful value; The `AsyncScope` will help with the _switching_ and
-_cleaning_. To that end it guarantees that **all functions assigned to a scope
-have finished when a scope exits**. To achieve this, it _switches_ to an async
-context at the end of the scope and stays there until all its functions
-complete. Here, complete does not mean succeed; functions may raise exceptions
-or get cancled. This is where the _cleaning_ part comes in which we cover in
-"Exception Management".
+You _schedule_ a `@tamed` function by calling it with `_async_scope=` set to a
+meaningful value. The `AsyncScope` helps with _switching_ and _cleaning_. To
+that end it guarantees that **all functions within the scope have finished when a
+scope exits**. To achieve this, it _switches_ between async contexts at the end
+of the scope until all its functions complete. Note here that complete does not
+mean succeed; functions may raise exceptions or get cancled. This is where the
+_cleaning_ part comes in which we cover later during "Exception Management".
 
 Additionally, you can nest scopes. `@tamed` functions assigned to an
 `outer_scope` execute independelty and alongside `@tamed` functions from an
-`inner_scope` whenever _switching_ to an async context occurs. However, since
-the `inner_scope` waits for all its functions to complete before _switching_
-back to the synchronous context, the _scheduling_ of new functions below an
-`inner_scope` will wait, too.
+`inner_scope` and there can be arbitrary _switching_ between them. However,
+since the `inner_scope` waits for all its functions to complete before
+_switching_ back to the synchronous context, the _scheduling_ of new functions
+below after the `inner_scope` will wait for `inner_scope`'s completion.
 
 ```python
 import asyncio
@@ -292,8 +290,8 @@ with AsyncScope() as outer_scope:
 
 ```
 
-As with `@tamed` and `DelayedResult`, this works not just in synchronous
-(`with`) contexts but also in asynchronous (`async with`) ones.
+Just like `@tamed` and `DelayedResult`, this works not just in synchronous
+contexts (`with`) but also in asynchronous ones (`async with`). 
 
 ```python
 import asyncio
@@ -331,20 +329,20 @@ slow_bulk_echo()
 ```
 
 The ability to nest `AsyncScopes` is especially useful when you combine it with
-their kwargs: `exit_mode` and `error_mode`. As the names suggest, the
+its kwargs: `exit_mode` and `error_mode`. As the names suggest, the
 `exit_mode` controls what happens when the scope exits and the `error_mode`
-controls what happens when one of the scope's function produces an error. 
+controls what happens when an assigned function produces an exception. 
 
 By default these are set to `exit_mode="wait"` and `error_mode="cancel"`. The
 former will `"wait"` for unfinished functions at the end of the scope. The
-latter will `"cancel"` all functions if one of them fails. This behavior matches
-a `asyncio.TaskGroup` or `trio.Nursery`. It is useful when you call functions in
-batches, e.g., when making several web API calls or reading a batch of images
-from disk.
+latter will `"cancel"` other unfinished functions if one of them fails. This
+behavior matches a `asyncio.TaskGroup` or `trio.Nursery`. It is useful when you
+call functions in batches, e.g., when making several web API calls or reading a
+batch of images from disk.
 
 Alternatively, you can use `exit_mode="cancel"` which will `"cancel"` unfinished
 functions at the end of the scope. This is useful when managing functions that
-don't terminate, e.g., because they use `while True` somewhere.
+never terminate, e.g., because they use `while True` somewhere.
 
 
 ```python
@@ -354,13 +352,15 @@ from tamer import tamed, AsyncScope
 
 class RateLimiter:
     def __init__(self):
-        self.tokens = 3  # initial burst
+        # allow an initial burst
+        self.max_tokens = 3
+        self.tokens = self.max_tokens
 
     @tamed
     async def generate_tokens(self, delay:int):
         while True:  # <-- generate new tokens forever
             await asyncio.sleep(delay)
-            self.tokens = min(self.tokens + 1, 3)
+            self.tokens = min(self.tokens + 1, self.max_tokens)
 
     @tamed
     async def get_token(self):
@@ -381,8 +381,8 @@ with AsyncScope(exit_mode="cancel") as service_layer:
     with AsyncScope() as batch:
         for _ in range(6):
             fake_request(throttle, _async_scope=batch)
-    # wait for all requests to finish.
-# cancel the rate limiter and wait for it to shut down
+    # <-- wait for all requests to finish
+# <-- cancel the rate limiter
 
 # Output
 # ------
@@ -395,12 +395,9 @@ with AsyncScope(exit_mode="cancel") as service_layer:
 ```
 
 ### Exception Management
-
 Unfortunately, shit happens. If it does, Python raises an exception and you, the
 author of the program, have to decide how to respond. `@tamed` async functions
-follow suite. There is no difference between them and ordinary functions. You
-handle their exceptions the same way you handle exceptions for normal functions;
-in the place you retrieve their result.
+follow suite and there is no difference between them and ordinary functions.
 
 ```python
 from tamer import tamed, AsyncScope
@@ -414,8 +411,10 @@ async def faulty_function()
 # ============================
 
 async def main():
+    coro = faulty_function()
+
     try:
-        await faulty_function()
+        await coro
     except RuntimeError:
         print("Actually, I'm good.")
 
@@ -460,18 +459,15 @@ with AsyncScope() as scope:
 # Actually, I'm good.
 ```
 
-The one exception are functions in an `AsyncScope`. Since the result is delayed
-(and you get a `DelayedResult`) the exception is too. Like the result, the
-exception may arrive at any time after it was scheduled which would cause
-problems if your program is currently not ready to handle the exception.
-Therefore, contrary to normal exceptions, the exception from a `DelayedResult`
-is not raised immediately. Instead, it is raised when you explicitly wait for
-the result via `DelayedResult.block()` or via `await delayed_result` depending
-on the current context.
+The one special case are functions in an `AsyncScope`. Here, you consume results
+using `DelayedResult.value` but handle exceptions when waiting for a result via
+`DelayedResult.block()` or via `await delayed_result`. This is deliberate since
+any code following the above statements can now assert that the result has
+_successfully_ arrived.
 
-The implicit await at the end of an `AsyncScope` acts as a catch-all that raises any
-exception that you don't wait for explicitly. This ensures that no exception is
-forgotten and that your program doesn't continue in a broken state.
+The implicit await at the end of an `AsyncScope` acts as a catch-all that raises
+any exceptions that you don't wait for explicitly. This ensures that no exception
+is left behind and that your program doesn't produce unintended side-effects.
 
 ```python
 from tamer import tamed, AsyncScope
@@ -491,12 +487,82 @@ with AsyncScope() as scope:
 # RuntimeError: Oh no!
 ```
 
+## Author's Note
 
-### Execution and Lifecycle Management
+> **Note**: This section is quite philosophical and more about why this package
+> exists and less about how you use it. It's the "ramblings of an old man",
+> so I won't tell anyone if you choose to skip it :)
 
-> **Note**: This section is fairly theoretical and goes deep into the execution
-> model of asynchronous programs. It is intended for the curious mind and the
-> "low-level hacker". I won't tell anyone if you choose to skip it :)
+If you read about python's asyncio library online you will find that people
+generally approach the library with a performance mindset. However, only some
+actually see this benefits materialize. This results in mixed, but often
+negative sentiment about the library ranging from asyncio being "fake
+parallelism" or "too complicated to use" to being "useful but very niche".
+
+In my mind, this sentiment typically traces back to three reasons that let users
+believe that asyncio should be used like threads:
+
+1. Users think that asyncio uses thread-level parallelism.
+2. Asyncio uses thread-like semantics (see the table at the end).
+3. A lot of online documentation and tutorials point out that `async/await`
+   gives massive performance boosts over thread-based webserver implementations.
+
+Writing asynchronous code while thinking about threads is not wrong ... but it's
+incomplete and - in my opinion - missdirected. Why? Because they are two
+different kinds of parallelism. Threadding takes a big block of work, slices it
+into smaller chunks, and works on multiple of them in parallel across multiple
+cores. `Async/await` takes a big block of work, flags periods of busy waiting
+and reorders instructions to minimize idle time. In other words, threadding uses
+thread-level parallelism (duh!) and `async/await` uses instruction-level parallelism.
+Both are forms of parallelism but they are **NOT** the same thing.
+
+|                 | Threads                  | Async/Await          |
+| --------------- | -------------------------| -------------------- |
+| Orchestration   | Main thread + inf-loop   | Event Loop           |
+| Creation        | `tid = Thread(fn, ...)`  | `coro = fn(...)`     |
+| Synchronization | `tid.join()`             | `await coro`         |
+| Data exchange   | shared memory            | shared memory        |
+| Overhead        | ~50 µs (OS level thread) | None (function call) | 
+| Concurrency     | preemtive                | cooperative          |
 
 
-## FAQ
+### Implicit Parallelism
+
+Instead of treating `async/await` as multi-threadded code, we should treat it as
+code that splits loading and consuming of data. It is aware that input data
+comes from external systems (DB, socket, filesystem, blob storage, ...), that
+these external systems are slow, and that programs spend most of their time
+waiting for data.
+
+Asyncios (clever) trick is to realize that we can only _execute_ instructions
+one by one (thank you GIL), but we can _wait_ for any number of external systems in
+parallel. Traditional synchronous code asks for a single piece of data, does
+nothing while it is being prepared (_busy waiting_), consumes it, and then moves
+on to ask for the next piece of data. Async code requests _all_ the data first,
+busy waits while it arrives, and then consumes the data one by one without waiting
+ever again. This reduces time spent idle from `sum(load_times)` (sync) to
+`max(load_times)` (async); a trick known as implicit parallelism.
+
+Further, if our workload allows processing data out of order, we request all
+data at the start, busy wait until the first piece arrives, process it, and then
+either move to the next piece or resume busy waiting until data arrives again.
+This way we spend between `min(load_times)` and `max(load_times)` busy waiting,
+which can be a _huge_ speedup compared to `sum(load_times)` in the sync case.
+
+### Why Create Async-Tamer
+
+Realizing how the parallelism behind `async/await` works and moving away from a
+thread-like design simplifies the code and its design. Functions that load data
+become `async def` and functions that consume the data remain as they were.
+Unfortunately, it is not simple to express this with asyncio. We can't use
+`await` outside an `async` function and executing an `async` function requires
+spinning up an event loop and orchestrating it.
+
+This is why I wrote async-tamer. It limits the extent to which `async`
+proliferates through the codebase, i.e., it `@tamed` the `async` keyword ^.^. I
+also really like the idea of structured concurrency in trio, which is exactly
+what we want when loading a "batch" of data asynchronously before processing it.
+However, I think it becomes even more useful if we are able to control the
+behavior of the context manager, which is why I added the lifecycle kwargs.
+
+Thanks for reading all the way to the end and happy coding!
