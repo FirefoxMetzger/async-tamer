@@ -1,8 +1,8 @@
 # Async-Tamer
 You shouldn't have to split your codebase or jump through hoops just to use
 `async def`. After all async functions are just functions ... with superpowers.
-Async-Tamer helps you harness these superpowers by seeing `asynd def` for what
-they are: A means to flag and reduce periods of busy waiting. (Details at the
+Async-Tamer helps you harness these superpowers by seeing `async def` for what
+it is: A means to flag and reduce periods of busy waiting. (Details at the
 end of this readme.)
 
 **Features**
@@ -236,7 +236,7 @@ with AsyncScope() as scope:
 ### The `AsyncScope`
 
 An `AsyncScope` manages a set of `@tamed` functions and controls their
-lifecycle. It's a structured way to add async sections to your codebase. Long
+lifecycle. It's a structured way to add async sections to your program. Long
 story short, you need to be aware of 3 keywords:
 
 1. Scheduling: Line of code that starts a `@tamed` function.
@@ -244,12 +244,13 @@ story short, you need to be aware of 3 keywords:
 3. Cleaning: Line of code that deals with error handling.
 
 You _schedule_ a `@tamed` function by calling it with `_async_scope=` set to a
-meaningful value. The `AsyncScope` helps with _switching_ and _cleaning_. To
-that end it guarantees that **all functions within the scope have finished when a
-scope exits**. To achieve this, it _switches_ between async contexts at the end
-of the scope until all its functions complete. Note here that complete does not
-mean succeed; functions may raise exceptions or get cancled. This is where the
-_cleaning_ part comes in which we cover later during "Exception Management".
+meaningful value and the `AsyncScope` helps with _switching_ and _cleaning_. To
+that end it guarantees that **all functions within the scope have finished when
+a scope exits**. To achieve this, it _switches_ between async contexts at the
+end of the scope until all its functions have finished. Note here that finished
+does not mean succeeded; functions may raise exceptions or get cancled. This is
+where the _cleaning_ part comes in which we cover later during "Exception
+Management".
 
 Additionally, you can nest scopes. `@tamed` functions assigned to an
 `outer_scope` execute independelty and alongside `@tamed` functions from an
@@ -341,9 +342,8 @@ call functions in batches, e.g., when making several web API calls or reading a
 batch of images from disk.
 
 Alternatively, you can use `exit_mode="cancel"` which will `"cancel"` unfinished
-functions at the end of the scope. This is useful when managing functions that
-never terminate, e.g., because they use `while True` somewhere.
-
+functions at the end of the scope. This is useful to shut down "infinity loops"
+or to cancel ongoing requests for data that you thought you'd need, but didn't.
 
 ```python
 import asyncio
@@ -364,6 +364,8 @@ class RateLimiter:
 
     @tamed
     async def get_token(self):
+        # Note: This would not work with threads, but is perfectly 
+        # fine in asyncio
         while self.tokens == 0:
             await asyncio.sleep(0)
         self.tokens -= 1
@@ -490,31 +492,33 @@ with AsyncScope() as scope:
 ## Author's Note
 
 > **Note**: This section is quite philosophical and more about why this package
-> exists and less about how you use it. It's the "ramblings of an old man",
+> exists and less about how you use it. It's the "ramblings of an old man"
 > so I won't tell anyone if you choose to skip it :)
 
 If you read about python's asyncio library online you will find that people
 generally approach the library with a performance mindset. However, only some
-actually see this benefits materialize. This results in mixed, but often
-negative sentiment about the library ranging from asyncio being "fake
-parallelism" or "too complicated to use" to being "useful but very niche".
+actually see its benefits materialize. This results in mixed, but often
+negative sentiment about the library ranging between asyncio being "fake
+parallelism", "too complicated to use", or "useful but very niche".
 
-In my mind, this sentiment typically traces back to three reasons that let users
-believe that asyncio should be used like threads:
+In my mind, this sentiment is typically caused by a mix of three reasons that
+lead users to believe that asyncio should be used like threads:
 
-1. Users think that asyncio uses thread-level parallelism.
+1. Users think that asyncio uses thread-level parallelism under the hood and/or
+   is used to implement green threads.
 2. Asyncio uses thread-like semantics (see the table at the end).
 3. A lot of online documentation and tutorials point out that `async/await`
    gives massive performance boosts over thread-based webserver implementations.
 
-Writing asynchronous code while thinking about threads is not wrong ... but it's
-incomplete and - in my opinion - missdirected. Why? Because they are two
-different kinds of parallelism. Threadding takes a big block of work, slices it
-into smaller chunks, and works on multiple of them in parallel across multiple
-cores. `Async/await` takes a big block of work, flags periods of busy waiting
-and reorders instructions to minimize idle time. In other words, threadding uses
-thread-level parallelism (duh!) and `async/await` uses instruction-level parallelism.
-Both are forms of parallelism but they are **NOT** the same thing.
+Writing asynchronous code while thinking about writing threads is not wrong ...
+but it's incomplete and - in my opinion - missdirected. Why? Because they are
+two different kinds of parallelism. Threadding takes a big block of work, slices
+it into smaller chunks, and works on multiple of them in parallel across
+multiple cores. `Async/await` takes a big block of work, flags periods of busy
+waiting and reorders instructions to minimize idle time. In other words,
+threadding uses thread-level parallelism (duh!) and `async/await` uses
+instruction-level parallelism. Both are forms of parallelism but they are
+**NOT** the same thing.
 
 |                 | Threads                  | Async/Await          |
 | --------------- | -------------------------| -------------------- |
@@ -528,22 +532,24 @@ Both are forms of parallelism but they are **NOT** the same thing.
 
 ### Implicit Parallelism
 
-Instead of treating `async/await` as multi-threadded code, we should treat it as
-code that splits loading and consuming of data. It is aware that input data
-comes from external systems (DB, socket, filesystem, blob storage, ...), that
-these external systems are slow, and that programs spend most of their time
-waiting for data.
+Instead of thinking about `async/await` as multi-threadded code, we should think
+about it as code that splits loading and consuming of data. It is aware that
+input data comes from external systems (DB, socket, filesystem, blob storage,
+...), that these external systems are slow, and that programs spend most of
+their time waiting for data.
 
 Asyncios (clever) trick is to realize that we can only _execute_ instructions
-one by one (thank you GIL), but we can _wait_ for any number of external systems in
-parallel. Traditional synchronous code asks for a single piece of data, does
+one by one (thank you GIL), but we can _wait_ for any number of external systems
+in parallel. Traditional (sync) code asks for a single piece of data, does
 nothing while it is being prepared (_busy waiting_), consumes it, and then moves
 on to ask for the next piece of data. Async code requests _all_ the data first,
-busy waits while it arrives, and then consumes the data one by one without waiting
-ever again. This reduces time spent idle from `sum(load_times)` (sync) to
-`max(load_times)` (async); a trick known as implicit parallelism.
+_busy waits for everything in parallel_ to arrive, and then consumes the data
+one by one without waiting ever again. This reduces time spent idle from
+`sum(load_times)` (sync) to `max(load_times)` (async); a trick known as implicit
+parallelism or - if you are into compilers and how CPUs work instruction-level
+parallelism.
 
-Further, if our workload allows processing data out of order, we request all
+Moreover, if our workload allows processing data out of order, we request all
 data at the start, busy wait until the first piece arrives, process it, and then
 either move to the next piece or resume busy waiting until data arrives again.
 This way we spend between `min(load_times)` and `max(load_times)` busy waiting,
@@ -554,15 +560,24 @@ which can be a _huge_ speedup compared to `sum(load_times)` in the sync case.
 Realizing how the parallelism behind `async/await` works and moving away from a
 thread-like design simplifies the code and its design. Functions that load data
 become `async def` and functions that consume the data remain as they were.
-Unfortunately, it is not simple to express this with asyncio. We can't use
+Unfortunately, it is not simple to express this with asyncio today. We can't use
 `await` outside an `async` function and executing an `async` function requires
 spinning up an event loop and orchestrating it.
 
 This is why I wrote async-tamer. It limits the extent to which `async`
-proliferates through the codebase, i.e., it `@tamed` the `async` keyword ^.^. I
-also really like the idea of structured concurrency in trio, which is exactly
-what we want when loading a "batch" of data asynchronously before processing it.
-However, I think it becomes even more useful if we are able to control the
-behavior of the context manager, which is why I added the lifecycle kwargs.
+proliferates through the codebase, i.e., it `@tamed` the `async` keyword ^.^. We
+need an event loop and its implicit parallelism while we are waiting for data.
+We don't need an event loop when locally processing data and we get into a world
+of pain if we attempt to do so. Both parts of a program should be clearly
+separated and `async def` (waiting for external stuff) vs `def` (processing
+local stuff) nicely fits that bill.
+
+The rest of the library really is syntax sugar and an attempt to remove as much
+boilerplate as possible. I really like the idea of structured concurrency in
+trio and it is exactly what we want when loading an "initial batch" of data.
+Thus, `AsyncScopes` work in a similar fashion. However, I also think that
+`Nurseries` and (asyncio) `TaskGroups` lack fine-grained control and adding the
+lifecycle kwargs felt like a natural extension of the idea.
 
 Thanks for reading all the way to the end and happy coding!
+x
