@@ -580,4 +580,3 @@ Thus, `AsyncScopes` work in a similar fashion. However, I also think that
 lifecycle kwargs felt like a natural extension of the idea.
 
 Thanks for reading all the way to the end and happy coding!
-x
